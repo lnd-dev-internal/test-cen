@@ -108,6 +108,7 @@ export default function ManageTestPage() {
   const [bankCategories, setBankCategories] = useState<any[]>([])
   const [loadingBank, setLoadingBank] = useState(false)
   const [selectedBankCat, setSelectedBankCat] = useState<string | 'all'>('all')
+  const [bankSearch, setBankSearch] = useState('')
 
   /* ===== SMART BUILD ===== */
   const [isSmartModalOpen, setIsSmartModalOpen] = useState(false)
@@ -122,7 +123,12 @@ export default function ManageTestPage() {
     setShowBankModal(true)
     setLoadingBank(true)
     const { data: cats } = await supabase.from('question_bank_categories').select('*').order('name')
-    const { data: qs } = await supabase.from('question_bank').select('*, question_bank_answers(*)').order('created_at', { ascending: false })
+    // Increased limit to 5000 and using join for better performance/reliability
+    const { data: qs } = await supabase
+      .from('question_bank')
+      .select('*, question_bank_answers(*)')
+      .order('created_at', { ascending: false })
+      .limit(5000)
     setBankCategories(cats || [])
     setBankQuestions(qs || [])
     setLoadingBank(false)
@@ -1136,6 +1142,19 @@ export default function ManageTestPage() {
               </button>
             </div>
 
+            <div className="p-6 border-b border-slate-100 bg-white flex gap-4">
+              <div className="flex-1 relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                <input
+                  type="text"
+                  placeholder="Tìm kiếm nội dung câu hỏi..."
+                  value={bankSearch}
+                  onChange={(e) => setBankSearch(e.target.value)}
+                  className="w-full h-12 pl-12 pr-4 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold focus:border-blue-500 outline-none transition-all"
+                />
+              </div>
+            </div>
+
             <div className="flex-1 overflow-hidden flex">
               {/* Sidebar Cats */}
               <div className="w-64 border-r border-slate-100 p-4 space-y-1 overflow-y-auto">
@@ -1160,42 +1179,48 @@ export default function ManageTestPage() {
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
                 {loadingBank ? (
                   <div className="text-center py-12 text-slate-400 font-medium">Đang tải câu hỏi...</div>
-                ) : bankQuestions.filter(bq => selectedBankCat === 'all' || bq.category_id === selectedBankCat).length === 0 ? (
-                  <div className="text-center py-12 text-slate-400 font-medium italic">Không có câu hỏi nào trong nhóm này.</div>
+                ) : bankQuestions
+                  .filter(bq => selectedBankCat === 'all' || bq.category_id === selectedBankCat)
+                  .filter(bq => bq.content.toLowerCase().includes(bankSearch.toLowerCase()))
+                  .length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 font-medium italic">Không có câu hỏi nào khớp với tìm kiếm.</div>
                 ) : (
-                  bankQuestions.filter(bq => selectedBankCat === 'all' || bq.category_id === selectedBankCat).map(bq => {
-                    const alreadyIn = questions.some(q => q.content === bq.content)
-                    return (
-                      <div key={bq.id} className="border border-slate-200 rounded-2xl p-4 flex justify-between items-start gap-4 hover:border-blue-200 transition-colors">
-                        <div className="flex-1 space-y-2">
-                          <div className={`text-[10px] font-bold uppercase tracking-wider inline-block px-2 py-0.5 rounded ${bq.type === 'essay' ? 'bg-purple-100 text-purple-600' :
-                            bq.type === 'multiple' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
-                            }`}>
-                            {bq.type === 'essay' ? 'Tự luận' : bq.type === 'multiple' ? 'Nhiều đáp án' : '1 đáp án'}
-                          </div>
-                          <div className="text-slate-800 font-medium line-clamp-2">{bq.content}</div>
-                          {bq.images && bq.images.length > 0 && (
-                            <div className="flex gap-1">
-                              {bq.images.map((img: string, i: number) => (
-                                <img key={i} src={img} className="h-10 w-10 object-cover rounded border" />
-                              ))}
+                  bankQuestions
+                    .filter(bq => selectedBankCat === 'all' || bq.category_id === selectedBankCat)
+                    .filter(bq => bq.content.toLowerCase().includes(bankSearch.toLowerCase()))
+                    .map(bq => {
+                      const alreadyIn = questions.some(q => q.content === bq.content)
+                      return (
+                        <div key={bq.id} className="border border-slate-200 rounded-2xl p-4 flex justify-between items-start gap-4 hover:border-blue-200 transition-colors">
+                          <div className="flex-1 space-y-2">
+                            <div className={`text-[10px] font-bold uppercase tracking-wider inline-block px-2 py-0.5 rounded ${bq.type === 'essay' ? 'bg-purple-100 text-purple-600' :
+                              bq.type === 'multiple' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'
+                              }`}>
+                              {bq.type === 'essay' ? 'Tự luận' : bq.type === 'multiple' ? 'Nhiều đáp án' : '1 đáp án'}
                             </div>
-                          )}
+                            <div className="text-slate-800 font-medium line-clamp-2">{bq.content}</div>
+                            {bq.images && bq.images.length > 0 && (
+                              <div className="flex gap-1">
+                                {bq.images.map((img: string, i: number) => (
+                                  <img key={i} src={img} className="h-10 w-10 object-cover rounded border" />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => {
+                              importQuestion(bq)
+                              alert('Đã thêm vào đề thi!')
+                            }}
+                            disabled={alreadyIn}
+                            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${alreadyIn ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white shadow-lg shadow-blue-100 hover:brightness-110 active:scale-95'
+                              }`}
+                          >
+                            {alreadyIn ? 'Đã có' : '+ Thêm'}
+                          </button>
                         </div>
-                        <button
-                          onClick={() => {
-                            importQuestion(bq)
-                            alert('Đã thêm vào đề thi!')
-                          }}
-                          disabled={alreadyIn}
-                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${alreadyIn ? 'bg-slate-100 text-slate-400 cursor-not-allowed' : 'bg-blue-600 text-white shadow-lg shadow-blue-100 hover:brightness-110 active:scale-95'
-                            }`}
-                        >
-                          {alreadyIn ? 'Đã có' : '+ Thêm'}
-                        </button>
-                      </div>
-                    )
-                  })
+                      )
+                    })
                 )}
               </div>
             </div>

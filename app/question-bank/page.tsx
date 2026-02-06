@@ -61,6 +61,7 @@ export default function QuestionBankPage() {
     const [isImportModalOpen, setIsImportModalOpen] = useState(false)
     const [importing, setImporting] = useState(false)
     const [isAiLoading, setIsAiLoading] = useState(false)
+    const [searchTerm, setSearchTerm] = useState('')
 
     const aiRefineQuestion = async () => {
         if (!editingQuestion?.content) return
@@ -146,13 +147,16 @@ export default function QuestionBankPage() {
     const loadData = async () => {
         setLoading(true)
         const { data: cats } = await supabase.from('question_bank_categories').select('*').order('name')
-        const { data: qs } = await supabase.from('question_bank').select('*').order('created_at', { ascending: false })
-        const { data: ans } = await supabase.from('question_bank_answers').select('*')
+        // Increase limit to 5000 and use join to avoid missing answers
+        const { data: qs } = await supabase.from('question_bank')
+            .select('*, question_bank_answers(*)')
+            .order('created_at', { ascending: false })
+            .limit(5000)
 
         const mappedQs: BankQuestion[] = (qs || []).map((q: any) => ({
             ...q,
             difficulty: q.difficulty || 'Easy',
-            answers: (ans || []).filter((a: any) => a.question_id === q.id)
+            answers: q.question_bank_answers || []
         }))
 
         setCategories(cats || [])
@@ -170,6 +174,10 @@ export default function QuestionBankPage() {
     const deleteCategory = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation()
         if (!confirm('Xóa nhóm này? Các câu hỏi trong nhóm sẽ được chuyển về "Mặc định".')) return
+
+        // Nullify category_id for questions in this category first
+        await supabase.from('question_bank').update({ category_id: null }).eq('category_id', id)
+
         const { error } = await supabase.from('question_bank_categories').delete().eq('id', id)
         if (error) alert(error.message)
         else loadData()
@@ -357,6 +365,20 @@ export default function QuestionBankPage() {
                 </div>
             </div>
 
+            {/* Search Bar */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                    <input
+                        type="text"
+                        placeholder="Tìm kiếm nội dung câu hỏi..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full h-12 pl-12 pr-4 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold focus:border-orange-500 outline-none transition-all"
+                    />
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-8">
                 <div className="space-y-6">
                     <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
@@ -394,53 +416,56 @@ export default function QuestionBankPage() {
                 <div className="space-y-4">
                     {loading ? (
                         <div className="text-center py-20 font-bold text-slate-400 animate-pulse text-xl">ĐANG TẢI DỮ LIỆU...</div>
-                    ) : (selectedCategory === 'all' ? questions : questions.filter(q => q.category_id === selectedCategory)).map(q => (
-                        <div key={q.id} id={q.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all group border-l-8 border-l-orange-500">
-                            <div className="flex justify-between items-start gap-4">
-                                <div className="flex-1 space-y-4">
-                                    <div className="flex items-center gap-2">
-                                        <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px] font-black uppercase tracking-widest">
-                                            {q.type === 'essay' ? 'Tự luận' : q.type === 'multiple' ? 'Nhiều đáp án' : '1 đáp án'}
-                                        </span>
-                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${q.difficulty === 'Hard' ? 'bg-red-100 text-red-600' :
-                                            q.difficulty === 'Medium' ? 'bg-orange-100 text-orange-600' :
-                                                'bg-green-100 text-green-600'
-                                            }`}>
-                                            {q.difficulty === 'Hard' ? 'Khó' : q.difficulty === 'Medium' ? 'Trung bình' : 'Dễ'}
-                                        </span>
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-auto">
-                                            NHÓM: {categories.find(c => c.id === q.category_id)?.name || 'Mặc định'}
-                                        </span>
+                    ) : questions
+                        .filter(q => selectedCategory === 'all' || q.category_id === selectedCategory)
+                        .filter(q => q.content.toLowerCase().includes(searchTerm.toLowerCase()))
+                        .map(q => (
+                            <div key={q.id} id={q.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all group border-l-8 border-l-orange-500">
+                                <div className="flex justify-between items-start gap-4">
+                                    <div className="flex-1 space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px] font-black uppercase tracking-widest">
+                                                {q.type === 'essay' ? 'Tự luận' : q.type === 'multiple' ? 'Nhiều đáp án' : '1 đáp án'}
+                                            </span>
+                                            <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${q.difficulty === 'Hard' ? 'bg-red-100 text-red-600' :
+                                                q.difficulty === 'Medium' ? 'bg-orange-100 text-orange-600' :
+                                                    'bg-green-100 text-green-600'
+                                                }`}>
+                                                {q.difficulty === 'Hard' ? 'Khó' : q.difficulty === 'Medium' ? 'Trung bình' : 'Dễ'}
+                                            </span>
+                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-auto">
+                                                NHÓM: {categories.find(c => c.id === q.category_id)?.name || 'Mặc định'}
+                                            </span>
+                                        </div>
+                                        <div className="text-slate-800 font-bold text-xl leading-tight whitespace-pre-wrap">{q.content}</div>
+
+                                        {q.images && q.images.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                                {q.images.map((img, i) => (
+                                                    <img key={i} src={img} alt="" className="h-24 rounded-xl border border-slate-100 shadow-sm" />
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {q.type !== 'essay' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+                                                {q.answers.map((a, i) => (
+                                                    <div key={i} className={`p-4 rounded-2xl border flex items-center gap-3 ${a.is_correct ? 'bg-green-50 border-green-200 text-green-700' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
+                                                        <div className={`w-2 h-2 rounded-full ${a.is_correct ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-slate-300'}`} />
+                                                        <span className="font-bold text-sm">{a.content}</span>
+                                                        {a.images && a.images.length > 0 && <span className="ml-auto text-[10px]">🖼️</span>}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
-                                    <div className="text-slate-800 font-bold text-xl leading-tight whitespace-pre-wrap">{q.content}</div>
-
-                                    {q.images && q.images.length > 0 && (
-                                        <div className="flex flex-wrap gap-2">
-                                            {q.images.map((img, i) => (
-                                                <img key={i} src={img} alt="" className="h-24 rounded-xl border border-slate-100 shadow-sm" />
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {q.type !== 'essay' && (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-                                            {q.answers.map((a, i) => (
-                                                <div key={i} className={`p-4 rounded-2xl border flex items-center gap-3 ${a.is_correct ? 'bg-green-50 border-green-200 text-green-700' : 'bg-slate-50 border-slate-100 text-slate-500'}`}>
-                                                    <div className={`w-2 h-2 rounded-full ${a.is_correct ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-slate-300'}`} />
-                                                    <span className="font-bold text-sm">{a.content}</span>
-                                                    {a.images && a.images.length > 0 && <span className="ml-auto text-[10px]">🖼️</span>}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="flex gap-2">
-                                    <button onClick={() => setEditingQuestion(q)} className="p-3 bg-slate-50 hover:bg-orange-500 hover:text-white rounded-2xl transition-all">✏️</button>
-                                    <button onClick={() => deleteQuestion(q.id)} className="p-3 bg-slate-50 hover:bg-red-500 hover:text-white rounded-2xl transition-all">🗑️</button>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setEditingQuestion(q)} className="p-3 bg-slate-50 hover:bg-orange-500 hover:text-white rounded-2xl transition-all">✏️</button>
+                                        <button onClick={() => deleteQuestion(q.id)} className="p-3 bg-slate-50 hover:bg-red-500 hover:text-white rounded-2xl transition-all">🗑️</button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                    ))}
+                        ))}
                 </div>
             </div>
 
