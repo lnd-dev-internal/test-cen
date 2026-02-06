@@ -109,6 +109,15 @@ export default function ManageTestPage() {
   const [loadingBank, setLoadingBank] = useState(false)
   const [selectedBankCat, setSelectedBankCat] = useState<string | 'all'>('all')
 
+  /* ===== SMART BUILD ===== */
+  const [isSmartModalOpen, setIsSmartModalOpen] = useState(false)
+  const [smartConfig, setSmartConfig] = useState({
+    easy: 0,
+    medium: 0,
+    hard: 0,
+    categoryId: 'all'
+  })
+
   const openBank = async () => {
     setShowBankModal(true)
     setLoadingBank(true)
@@ -133,6 +142,49 @@ export default function ManageTestPage() {
       }))
     }
     setQuestions(prev => [...prev, newQ])
+  }
+
+  const handleSmartBuild = async () => {
+    setIsSmartModalOpen(false)
+    setSaving(true)
+
+    const { data: qs } = await supabase.from('question_bank').select('*')
+    const { data: ans } = await supabase.from('question_bank_answers').select('*')
+
+    const mappedQs = (qs || []).map((q: any) => ({
+      ...q,
+      answers: (ans || []).filter((a: any) => a.question_id === q.id)
+    }))
+
+    const filtered = mappedQs.filter((q: any) => smartConfig.categoryId === 'all' || q.category_id === smartConfig.categoryId)
+
+    const pick = (diff: string, count: number) => {
+      const pool = filtered.filter((q: any) => (q.difficulty || 'Easy') === diff).sort(() => Math.random() - 0.5)
+      return pool.slice(0, count)
+    }
+
+    const selected = [
+      ...pick('Easy', smartConfig.easy),
+      ...pick('Medium', smartConfig.medium),
+      ...pick('Hard', smartConfig.hard)
+    ]
+
+    const newQs: Question[] = selected.map((q: any, i: number) => ({
+      id: `new-smart-${Date.now()}-${i}`,
+      content: q.content,
+      type: q.type as QuestionType,
+      images: q.images || [],
+      options: q.answers.map((a: any, ai: number) => ({
+        id: toLetter(ai),
+        text: a.content,
+        isCorrect: a.is_correct,
+        images: a.images || [],
+      }))
+    }))
+
+    setQuestions(prev => [...prev, ...newQs])
+    setSaving(false)
+    alert(`✅ Đã bốc ngẫu nhiên ${newQs.length} câu hỏi!`)
   }
 
   /* ===== DATA STATE ===== */
@@ -267,6 +319,14 @@ export default function ManageTestPage() {
 
     load()
   }, [testId])
+
+  useEffect(() => {
+    const fetchCats = async () => {
+      const { data } = await supabase.from('question_bank_categories').select('*').order('name')
+      setBankCategories(data || [])
+    }
+    fetchCats()
+  }, [])
 
   /* ===== TOGGLE PUBLISH ===== */
   const togglePublish = async () => {
@@ -1022,6 +1082,13 @@ export default function ManageTestPage() {
               Lấy từ ngân hàng
             </button>
             <button
+              onClick={() => setIsSmartModalOpen(true)}
+              disabled={loading || saving || isPublished}
+              className="px-6 py-3 rounded-xl bg-green-600 text-white font-bold text-lg disabled:opacity-50 active:scale-95 transition-transform flex items-center gap-2"
+            >
+              <span>🧠</span> Smart Build
+            </button>
+            <button
               onClick={() =>
                 setQuestions(prev => [
                   ...prev,
@@ -1139,6 +1206,75 @@ export default function ManageTestPage() {
                 className="px-6 py-2 rounded-xl bg-slate-800 text-white font-bold"
               >
                 Xong
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ SMART BUILD MODAL */}
+      {isSmartModalOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
+          <div className="bg-white rounded-[40px] w-full max-w-lg shadow-2xl p-8 space-y-8 border border-white/20">
+            <div>
+              <h2 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">🧠 Smart Build</h2>
+              <p className="text-sm text-slate-500 font-medium">Hệ thống sẽ bốc ngẫu nhiên câu hỏi theo yêu cầu của bạn.</p>
+            </div>
+
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-xs font-black uppercase text-slate-400 tracking-widest ml-1">Nhóm câu hỏi</label>
+                <select
+                  value={smartConfig.categoryId}
+                  onChange={e => setSmartConfig({ ...smartConfig, categoryId: e.target.value })}
+                  className="w-full h-14 px-5 bg-slate-50 border-2 border-slate-100 rounded-2xl font-bold focus:border-green-500 outline-none transition-all"
+                >
+                  <option value="all">Tất cả nhóm</option>
+                  {bankCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-green-600 tracking-widest ml-1">Dễ</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={smartConfig.easy}
+                    onChange={e => setSmartConfig({ ...smartConfig, easy: Number(e.target.value) })}
+                    className="w-full h-14 px-4 bg-green-50 border-2 border-green-100 rounded-2xl font-black text-center focus:border-green-500 outline-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-orange-600 tracking-widest ml-1">T.Bình</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={smartConfig.medium}
+                    onChange={e => setSmartConfig({ ...smartConfig, medium: Number(e.target.value) })}
+                    className="w-full h-14 px-4 bg-orange-50 border-2 border-orange-100 rounded-2xl font-black text-center focus:border-orange-500 outline-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-red-600 tracking-widest ml-1">Khó</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={smartConfig.hard}
+                    onChange={e => setSmartConfig({ ...smartConfig, hard: Number(e.target.value) })}
+                    className="w-full h-14 px-4 bg-red-50 border-2 border-red-100 rounded-2xl font-black text-center focus:border-red-500 outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-4">
+              <button onClick={() => setIsSmartModalOpen(false)} className="px-6 py-3 rounded-2xl font-bold text-slate-500 hover:bg-slate-50 transition-all">HỦY</button>
+              <button
+                onClick={handleSmartBuild}
+                className="px-8 py-3 rounded-2xl bg-black text-white font-black hover:bg-slate-800 transition-all shadow-xl active:scale-95 uppercase tracking-tight"
+              >
+                Bốc câu hỏi ngay
               </button>
             </div>
           </div>
