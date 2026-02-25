@@ -10,12 +10,14 @@ type Answer = {
   id: string
   content: string
   is_correct: boolean
+  images: string[]
 }
 
 type Question = {
   id: string
   content: string
   type: QuestionType
+  images: string[]
   answers: Answer[]
 }
 
@@ -51,6 +53,17 @@ type ViolationLog = {
   created_at: string
 }
 
+function parseImages(val: string | null | undefined): string[] {
+  if (!val) return []
+  try {
+    if (val.trim().startsWith('[')) {
+      const parsed = JSON.parse(val)
+      if (Array.isArray(parsed)) return parsed.filter((x: any) => typeof x === 'string')
+    }
+  } catch (e) { }
+  return [val]
+}
+
 function formatDuration(seconds: number | null) {
   if (!seconds && seconds !== 0) return '-'
   const m = Math.floor(seconds / 60)
@@ -61,19 +74,123 @@ function formatDuration(seconds: number | null) {
 function formatDateTime(isoString: string | null) {
   if (!isoString) return '-'
   const date = new Date(isoString)
-
-  // Manual formatting to avoid hydration mismatch
   const pad = (n: number) => n.toString().padStart(2, '0')
-
   const day = pad(date.getDate())
   const month = pad(date.getMonth() + 1)
   const year = date.getFullYear()
   const hours = pad(date.getHours())
   const minutes = pad(date.getMinutes())
   const seconds = pad(date.getSeconds())
-
   return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
 }
+
+// ────────────────────────────────────────────────────────────
+// Export helpers
+// ────────────────────────────────────────────────────────────
+
+function buildExportRows(
+  submission: Submission,
+  questions: Question[],
+  subAnswerMap: Map<string, SubmissionAnswer>,
+  testTitle: string,
+) {
+  const rows: Record<string, string>[] = []
+
+  questions.forEach((q, idx) => {
+    const sa = subAnswerMap.get(q.id)
+    const selectedIds = sa?.selected_answer_ids ?? []
+    const correctIds = q.answers.filter(a => a.is_correct).map(a => a.id)
+
+    const selectedAnswers = q.answers
+      .filter(a => selectedIds.includes(a.id))
+      .map(a => a.content || '[Đáp án hình ảnh]')
+      .join(' | ')
+
+    const correctAnswers = q.answers
+      .filter(a => a.is_correct)
+      .map(a => a.content || '[Đáp án hình ảnh]')
+      .join(' | ')
+
+    rows.push({
+      'Bài thi': testTitle,
+      'Thí sinh': submission.candidate_name?.trim() || 'Ẩn danh',
+      'Điểm (%)': String(submission.score_percent),
+      'Kết quả': submission.passed ? 'ĐẠT' : 'CHƯA ĐẠT',
+      'Thời gian làm': formatDuration(submission.duration_seconds),
+      'Số vi phạm': String(submission.violation_count ?? 0),
+      'Ngày nộp': formatDateTime(submission.submitted_at ?? submission.created_at),
+      'STT câu': String(idx + 1),
+      'Nội dung câu hỏi': q.content,
+      'Loại câu': q.type === 'essay' ? 'Tự luận' : q.type === 'multiple' ? 'Nhiều đáp án' : 'Một đáp án',
+      'Đáp án được chọn': q.type === 'essay' ? (sa?.essay_text ?? '') : selectedAnswers,
+      'Đáp án đúng': q.type === 'essay' ? '' : correctAnswers,
+      'Đúng/Sai': q.type === 'essay' ? 'Tự luận' : sa?.is_correct === true ? 'Đúng' : 'Sai',
+    })
+  })
+
+  return rows
+}
+
+function exportCSV(rows: Record<string, string>[], filename: string) {
+  if (rows.length === 0) return
+  const headers = Object.keys(rows[0])
+  const escape = (v: string) => `"${(v ?? '').replace(/"/g, '""')}"`
+  const lines = [
+    headers.map(escape).join(','),
+    ...rows.map(r => headers.map(h => escape(r[h] ?? '')).join(','))
+  ]
+  const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportExcel(rows: Record<string, string>[], filename: string) {
+  if (rows.length === 0) return
+  const headers = Object.keys(rows[0])
+
+  // Build a simple HTML table that Excel can open
+  const table = `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${headers.map(h => `<td>${(r[h] ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`).join('')}</tr>`).join('')
+    }</tbody></table>`
+
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Sheet1</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>
+<body>${table}</body></html>`
+
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function copyForGoogleSheet(rows: Record<string, string>[]) {
+  if (rows.length === 0) return
+  const headers = Object.keys(rows[0])
+  const lines = [
+    headers.join('\t'),
+    ...rows.map(r => headers.map(h => (r[h] ?? '').replace(/\t/g, ' ').replace(/\n/g, ' ')).join('\t'))
+  ]
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    alert('✅ Đã copy dữ liệu! Mở Google Sheet và nhấn Ctrl+V (hoặc Cmd+V) để dán.')
+  }).catch(() => {
+    // fallback
+    const ta = document.createElement('textarea')
+    ta.value = lines.join('\n')
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    alert('✅ Đã copy dữ liệu! Mở Google Sheet và nhấn Ctrl+V (hoặc Cmd+V) để dán.')
+  })
+}
+
+// ────────────────────────────────────────────────────────────
 
 export default function ReportDetailPage() {
   const supabase = createClient()
@@ -83,10 +200,12 @@ export default function ReportDetailPage() {
 
   const [loading, setLoading] = useState(true)
   const [submission, setSubmission] = useState<Submission | null>(null)
+  const [testTitle, setTestTitle] = useState('')
   const [questions, setQuestions] = useState<Question[]>([])
   const [subAnswers, setSubAnswers] = useState<SubmissionAnswer[]>([])
   const [violationLogs, setViolationLogs] = useState<ViolationLog[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
 
   useEffect(() => {
     const run = async () => {
@@ -107,6 +226,14 @@ export default function ReportDetailPage() {
       }
       setSubmission(sub)
 
+      // Load test title
+      const { data: testRow } = await supabase
+        .from('tests')
+        .select('title')
+        .eq('id', sub.test_id)
+        .single()
+      setTestTitle(testRow?.title ?? '')
+
       const { data: sa, error: saErr } = await supabase
         .from('test_submission_answers')
         .select('*')
@@ -119,9 +246,10 @@ export default function ReportDetailPage() {
       }
       setSubAnswers(sa ?? [])
 
+      // ✅ FIX: Fetch image_url for questions
       const { data: qsRaw, error: qsErr } = await supabase
         .from('questions')
-        .select('id, content, type')
+        .select('id, content, type, image_url')
         .eq('test_id', sub.test_id)
 
       if (qsErr) {
@@ -130,14 +258,15 @@ export default function ReportDetailPage() {
         return
       }
 
-      const qs = (qsRaw ?? []) as Array<{ id: string; content: string; type: QuestionType }>
+      const qs = (qsRaw ?? []) as Array<{ id: string; content: string; type: QuestionType; image_url: string | null }>
       const questionIds = qs.map(q => q.id)
 
       const answersByQuestion = new Map<string, Answer[]>()
       if (questionIds.length > 0) {
+        // ✅ FIX: Also fetch image_url for answers
         const { data: ansRaw, error: ansErr } = await supabase
           .from('answers')
-          .select('id, question_id, content, is_correct')
+          .select('id, question_id, content, is_correct, image_url')
           .in('question_id', questionIds)
 
         if (ansErr) {
@@ -148,7 +277,12 @@ export default function ReportDetailPage() {
 
         for (const a of (ansRaw ?? []) as any[]) {
           const arr = answersByQuestion.get(a.question_id) ?? []
-          arr.push({ id: a.id, content: a.content, is_correct: a.is_correct })
+          arr.push({
+            id: a.id,
+            content: a.content,
+            is_correct: a.is_correct,
+            images: parseImages(a.image_url),
+          })
           answersByQuestion.set(a.question_id, arr)
         }
       }
@@ -157,6 +291,7 @@ export default function ReportDetailPage() {
         id: q.id,
         content: q.content,
         type: q.type,
+        images: parseImages(q.image_url),
         answers: answersByQuestion.get(q.id) ?? [],
       }))
 
@@ -186,6 +321,13 @@ export default function ReportDetailPage() {
     return m
   }, [subAnswers])
 
+  const exportRows = useMemo(() => {
+    if (!submission) return []
+    return buildExportRows(submission, questions, subAnswerMap, testTitle)
+  }, [submission, questions, subAnswerMap, testTitle])
+
+  const safeFilename = (testTitle || 'bai-lam').replace(/[^a-zA-Z0-9\u00C0-\u024F\u1E00-\u1EFF\s-]/g, '').replace(/\s+/g, '-').slice(0, 50)
+
   if (loading) return <div className="p-6 text-gray-600">Đang tải...</div>
   if (error) return <div className="p-6 text-red-600">Lỗi: {error}</div>
   if (!submission) return <div className="p-6 text-gray-600">Không có dữ liệu.</div>
@@ -196,9 +338,11 @@ export default function ReportDetailPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--primary)]">Chi tiết bài làm</h1>
+          {testTitle && (
+            <div className="mt-1 text-sm font-semibold text-gray-500">{testTitle}</div>
+          )}
 
           <div className="mt-2 text-sm text-gray-600 space-y-1">
-            {/* ✅ THÊM DÒNG NÀY */}
             <div>
               Thí sinh:{' '}
               <span className="font-semibold text-gray-900">
@@ -234,13 +378,79 @@ export default function ReportDetailPage() {
           </div>
         </div>
 
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Export Button Group */}
+          <div className="relative">
+            <button
+              onClick={() => setExportMenuOpen(v => !v)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-sm transition-all"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5m0 0l5-5m-5 5V4" />
+              </svg>
+              Xuất dữ liệu
+              <svg xmlns="http://www.w3.org/2000/svg" className={`w-3 h-3 transition-transform ${exportMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
 
-        <button
-          onClick={() => router.push('/reports')}
-          className="px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700"
-        >
-          ← Quay lại
-        </button>
+            {exportMenuOpen && (
+              <div
+                className="absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden"
+                onMouseLeave={() => setExportMenuOpen(false)}
+              >
+                <button
+                  onClick={() => {
+                    exportCSV(exportRows, `${safeFilename}.csv`)
+                    setExportMenuOpen(false)
+                  }}
+                  className="w-full text-left px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100 transition-colors"
+                >
+                  <span className="text-lg">📄</span>
+                  <div>
+                    <div>Xuất CSV</div>
+                    <div className="text-xs font-normal text-gray-400">Mở bằng Excel / Numbers</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    exportExcel(exportRows, `${safeFilename}.xls`)
+                    setExportMenuOpen(false)
+                  }}
+                  className="w-full text-left px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100 transition-colors"
+                >
+                  <span className="text-lg">📊</span>
+                  <div>
+                    <div>Xuất Excel (.xls)</div>
+                    <div className="text-xs font-normal text-gray-400">Microsoft Excel</div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    copyForGoogleSheet(exportRows)
+                    setExportMenuOpen(false)
+                  }}
+                  className="w-full text-left px-4 py-3 text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
+                >
+                  <span className="text-lg">🟢</span>
+                  <div>
+                    <div>Copy cho Google Sheet</div>
+                    <div className="text-xs font-normal text-gray-400">Dán trực tiếp vào Google Sheets</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => router.push('/reports')}
+            className="px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700"
+          >
+            ← Quay lại
+          </button>
+        </div>
       </div>
 
       {/* ✅ Lịch sử Vi phạm */}
@@ -287,7 +497,7 @@ export default function ReportDetailPage() {
 
                 {!isEssay && (
                   <span
-                    className={`text-xs px-2.5 py-1 rounded-full border ${sa?.is_correct
+                    className={`shrink-0 text-xs px-2.5 py-1 rounded-full border ${sa?.is_correct
                       ? 'border-green-300 bg-green-50 text-green-700'
                       : 'border-red-300 bg-red-50 text-red-700'
                       }`}
@@ -297,11 +507,25 @@ export default function ReportDetailPage() {
                 )}
 
                 {isEssay && (
-                  <span className="text-xs px-2.5 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-600">
+                  <span className="shrink-0 text-xs px-2.5 py-1 rounded-full border border-gray-200 bg-gray-50 text-gray-600">
                     Tự luận
                   </span>
                 )}
               </div>
+
+              {/* ✅ FIX: Hiển thị ảnh câu hỏi */}
+              {q.images.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  {q.images.map((img, i) => (
+                    <img
+                      key={i}
+                      src={img}
+                      alt={`Hình câu ${idx + 1}`}
+                      className="max-w-full max-h-80 rounded-xl border border-gray-200 object-contain bg-gray-50"
+                    />
+                  ))}
+                </div>
+              )}
 
               {/* MCQ */}
               {!isEssay && (
@@ -321,24 +545,61 @@ export default function ReportDetailPage() {
                         : 'border-gray-200 bg-white'
 
                     return (
-                      <div key={a.id} className={`rounded-lg border p-3 flex items-center justify-between ${cls}`}>
-                        <div className="text-sm text-gray-900">{a.content}</div>
-
-                        <div className="flex gap-2">
-                          {isCorrect && (
-                            <span className="text-xs px-2 py-1 rounded-full border border-green-300 bg-white text-green-700">
-                              Đáp án đúng
+                      <div key={a.id} className={`rounded-lg border p-3 ${cls}`}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2 flex-1">
+                            {/* ✅ FIX: Hiển thị checkbox/radio state chính xác */}
+                            <span className={`mt-0.5 shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSelected
+                                ? isCorrect
+                                  ? 'border-green-500 bg-green-500'
+                                  : 'border-red-500 bg-red-500'
+                                : isCorrect
+                                  ? 'border-green-400 bg-white'
+                                  : 'border-gray-300 bg-white'
+                              }`}>
+                              {isSelected && (
+                                <span className="w-2 h-2 rounded-full bg-white block" />
+                              )}
                             </span>
-                          )}
 
-                          {isSelected && (
-                            <span
-                              className={`text-xs px-2 py-1 rounded-full border bg-white ${isCorrect ? 'border-green-300 text-green-700' : 'border-red-300 text-red-700'
-                                }`}
-                            >
-                              Bạn chọn
-                            </span>
-                          )}
+                            <div className="flex-1">
+                              {/* ✅ Hiển thị text đáp án */}
+                              {a.content && (
+                                <div className="text-sm text-gray-900">{a.content}</div>
+                              )}
+
+                              {/* ✅ FIX: Hiển thị ảnh đáp án với kích thước full (không bị thu nhỏ) */}
+                              {a.images.length > 0 && (
+                                <div className="mt-2 flex flex-col gap-2">
+                                  {a.images.map((img, i) => (
+                                    <img
+                                      key={i}
+                                      src={img}
+                                      alt={`Đáp án ${String.fromCharCode(65 + q.answers.indexOf(a))}`}
+                                      className="max-w-full max-h-64 rounded-lg border object-contain bg-gray-50"
+                                    />
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 shrink-0">
+                            {isCorrect && (
+                              <span className="text-xs px-2 py-1 rounded-full border border-green-300 bg-white text-green-700 whitespace-nowrap">
+                                Đáp án đúng
+                              </span>
+                            )}
+
+                            {isSelected && (
+                              <span
+                                className={`text-xs px-2 py-1 rounded-full border bg-white whitespace-nowrap ${isCorrect ? 'border-green-300 text-green-700' : 'border-red-300 text-red-700'
+                                  }`}
+                              >
+                                Bạn chọn
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )
@@ -367,6 +628,35 @@ export default function ReportDetailPage() {
           )
         })}
       </div>
+
+      {/* Bottom export bar */}
+      {questions.length > 0 && (
+        <div className="mt-8 pt-6 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-gray-500">
+            Tổng {questions.length} câu hỏi • {submission.correct_count}/{submission.total_count} câu đúng
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => exportCSV(exportRows, `${safeFilename}.csv`)}
+              className="px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-sm flex items-center gap-2 transition-colors shadow-sm"
+            >
+              📄 CSV
+            </button>
+            <button
+              onClick={() => exportExcel(exportRows, `${safeFilename}.xls`)}
+              className="px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-sm flex items-center gap-2 transition-colors shadow-sm"
+            >
+              📊 Excel
+            </button>
+            <button
+              onClick={() => copyForGoogleSheet(exportRows)}
+              className="px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-sm flex items-center gap-2 transition-colors shadow-sm"
+            >
+              🟢 Copy → Google Sheets
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
